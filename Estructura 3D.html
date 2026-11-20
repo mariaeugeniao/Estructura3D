@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Visor 3D de la estructura</title>
+<style>
+/* Layout: one-screen tool. 3D view fills the left, a fixed-width panel on the right with the legend; stacks on phones. */
+:root {
+  --bg: #f3f5f8;
+  --panel: #ffffff;
+  --ink: #17202c;
+  --muted: #5b6676;
+  --line: #d8dee7;
+  --accent: #1d5fd1;
+  --on-accent: #ffffff;
+  --canvas: #e9edf3;
+  --joint: #3a4554;
+  --axis: #3a4554;
+  --label-bg: rgba(255,255,255,0.92);
+  --edge: rgba(23,32,44,0.38);
+  --g1: #1d3f8f; --g2: #7a3db8; --g3: #3aa6e0; --g4: #2f9a47;
+  --g5: #e0609f; --g6: #ee8a1f; --g7: #8a5a2e; --g8: #d22e2e;
+  --font-body: "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", Consolas, Menlo, "DejaVu Sans Mono", monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12161c; --panel: #1a2029; --ink: #e6ebf2; --muted: #98a3b3; --line: #2e3744;
+    --accent: #6f9dff; --on-accent: #0d1420; --canvas: #161b22; --joint: #b9c3d1; --axis: #b9c3d1; --label-bg: rgba(26,32,41,0.92); --edge: rgba(0,0,0,0.6);
+    --g1: #4d74d6; --g2: #a774e0; --g3: #5cc0f2; --g4: #4cc068;
+    --g5: #f088bd; --g6: #f5a24a; --g7: #b8834f; --g8: #f05555;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12161c; --panel: #1a2029; --ink: #e6ebf2; --muted: #98a3b3; --line: #2e3744;
+  --accent: #6f9dff; --on-accent: #0d1420; --canvas: #161b22; --joint: #b9c3d1; --axis: #b9c3d1; --label-bg: rgba(26,32,41,0.92); --edge: rgba(0,0,0,0.6);
+  --g1: #4d74d6; --g2: #a774e0; --g3: #5cc0f2; --g4: #4cc068;
+  --g5: #f088bd; --g6: #f5a24a; --g7: #b8834f; --g8: #f05555;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 14px; line-height: 1.45; }
+.app { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) 340px; }
+.view { position: relative; min-height: 0; background: var(--canvas); overflow: hidden; }
+#gl { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; outline: none; }
+#gl.dragging { cursor: grabbing; }
+#labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.lbl { position: absolute; transform: translate(-50%, -50%); font-family: var(--font-mono); font-size: 11px; font-weight: 500; line-height: 1;
+  padding: 2px 4px 2px 5px; border-radius: 3px; background: var(--label-bg); color: var(--ink); border-left: 3px solid currentColor; white-space: nowrap;
+  font-variant-numeric: tabular-nums; }
+.lbl span { color: var(--ink); }
+.axlbl { position: absolute; transform: translate(-50%, -50%); font-family: var(--font-mono); font-size: 12px; font-weight: 600; line-height: 1; padding: 2px 4px; border-radius: 3px; background: var(--label-bg); color: var(--axis); }
+.view-head { position: absolute; left: 16px; top: 14px; right: 16px; display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; pointer-events: none; }
+.view-head h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; text-wrap: balance; }
+.view-head .meta { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.panel { background: var(--panel); border-left: 1px solid var(--line); overflow-y: auto; padding: 18px 18px 22px; display: flex; flex-direction: column; gap: 18px; }
+.panel h2 { margin: 0 0 8px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.seg { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.seg button { font: inherit; font-size: 12.5px; padding: 8px 6px; border: 0; background: transparent; color: var(--ink); cursor: pointer; line-height: 1.25; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); font-weight: 600; }
+.seg button:hover:not([aria-pressed="true"]) { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+button:focus-visible, input:focus-visible + .sw, #gl:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.legend-note { margin: 10px 0 0; color: var(--muted); font-size: 12.5px; }
+.legend { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; }
+.legend li { display: grid; grid-template-columns: 16px 22px minmax(0, 1fr); gap: 0 8px; align-items: start; padding: 8px 0; border-top: 1px solid var(--line); }
+.legend li:first-child { border-top: 0; }
+.chip { width: 16px; height: 16px; border-radius: 3px; margin-top: 2px; }
+.gnum { font-family: var(--font-mono); font-weight: 500; color: var(--muted); margin-top: 1px; }
+.gname { font-weight: 500; }
+.gsub { grid-column: 3; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.gsec { grid-column: 3; font-family: var(--font-mono); font-size: 13px; font-weight: 500; margin-top: 2px; }
+.gsec .n { color: var(--muted); font-weight: 400; font-size: 12px; }
+.switch { display: flex; align-items: center; gap: 10px; cursor: pointer; user-select: none; }
+.switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.switch .sw { width: 34px; height: 20px; border-radius: 10px; background: var(--line); position: relative; flex: none; transition: background .15s; }
+.switch .sw::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: transform .15s; box-shadow: 0 1px 2px rgba(0,0,0,.25); }
+.switch input:checked + .sw { background: var(--accent); }
+.switch input:checked + .sw::after { transform: translateX(14px); }
+.btn { font: inherit; font-size: 13px; padding: 7px 12px; border-radius: 7px; border: 1px solid var(--line); background: transparent; color: var(--ink); cursor: pointer; }
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.tools { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+.help { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 12.5px; }
+.help kbd { font-family: var(--font-mono); font-size: 11.5px; padding: 1px 5px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; color: var(--ink); background: var(--bg); }
+.help b { color: var(--ink); font-weight: 500; }
+@media (max-width: 760px) {
+  .app { grid-template-columns: 1fr; grid-template-rows: 62% auto; height: auto; min-height: 100%; }
+  .view { height: 62svh; min-height: 340px; }
+  .panel { border-left: 0; border-top: 1px solid var(--line); overflow: visible; }
+}
+@media (prefers-reduced-motion: reduce) { .switch .sw, .switch .sw::after { transition: none; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="view">
+    <canvas id="gl" tabindex="0" aria-label="Vista 3D de la estructura"></canvas>
+    <div id="labels" aria-hidden="true"></div>
+    <div class="view-head">
+      <h1>Estructura del polipasto</h1>
+      <span class="meta" id="meta"></span>
+    </div>
+  </div>
+  <aside class="panel">
+    <section>
+      <h2>Leyenda</h2>
+      <div class="seg" role="group" aria-label="Contenido de la leyenda">
+        <button type="button" id="m-grupos" data-mode="grupos" aria-pressed="true">Grupos</button>
+        <button type="button" id="m-ini" data-mode="ini" aria-pressed="false">Secciones modelo inicial</button>
+        <button type="button" id="m-fin" data-mode="fin" aria-pressed="false">Secciones modelo final</button>
+      </div>
+      <p class="legend-note" id="legend-note"></p>
+      <ul class="legend" id="legend"></ul>
+    </section>
+    <section class="tools">
+      <h2>Vista</h2>
+      <label class="switch" for="show-num">
+        <input type="checkbox" id="show-num">
+        <span class="sw"></span>
+        <span>Mostrar número de barra</span>
+      </label>
+      <button type="button" class="btn" id="reset">Restablecer vista</button>
+    </section>
+    <section>
+      <h2>Cómo moverse</h2>
+      <ul class="help">
+        <li><b>Girar:</b> <kbd>Ctrl</kbd> + arrastrar con la rueda pulsada (o arrastrar con el botón izquierdo)</li>
+        <li><b>Desplazar:</b> arrastrar con la rueda pulsada (o <kbd>Mayús</kbd> + botón izquierdo)</li>
+        <li><b>Zoom:</b> girar la rueda</li>
+        <li><b>En pantalla táctil:</b> un dedo para girar, dos para desplazar y hacer zoom</li>
+      </ul>
+    </section>
+  </aside>
+</div>
+
+<script id="model" type="application/json">{"joints":[["1",3.85,1.75,5.9],["2",7.95,1.75,5.9],["3",3.85,1.75,4.9],["4",7.95,1.75,4.9],["5",3.85,3.5,5.9],["6",7.95,3.5,5.9],["7",3.85,3.5,4.9],["8",7.95,3.5,4.9],["9",3.85,5.25,5.9],["10",7.95,5.25,5.9],["11",3.85,5.25,4.9],["12",7.95,5.25,4.9],["13",3.85,7.0,5.9],["14",7.95,7.0,5.9],["15",3.85,7.0,4.9],["16",7.95,7.0,4.9],["17",3.85,8.75,5.9],["18",7.95,8.75,5.9],["19",3.85,8.75,4.9],["20",7.95,8.75,4.9],["21",3.85,10.5,5.9],["22",7.95,10.5,5.9],["23",3.85,10.5,4.9],["24",7.95,10.5,4.9],["25",3.85,12.25,5.9],["26",7.95,12.25,5.9],["27",3.85,12.25,4.9],["28",7.95,12.25,4.9],["29",0.0,0.0,1.1],["30",0.0,0.0,5.9],["31",0.0,4.85,1.1],["32",0.0,4.85,5.9],["33",0.0,9.65,1.1],["34",0.0,9.65,5.9],["35",0.0,14.0,1.1],["36",0.0,14.0,5.9],["37",10.8,14.0,1.1],["38",10.8,14.0,5.9],["39",10.8,0.0,1.1],["40",10.8,0.0,5.9],["41",10.8,4.35,1.1],["42",10.8,4.35,5.9],["43",10.8,10.65,1.1],["44",10.8,10.65,5.9],["45",3.85,14.0,5.9],["46",3.85,14.0,1.1],["47",7.95,14.0,5.9],["48",7.95,14.0,1.1],["49",3.85,0.0,5.9],["50",3.85,0.0,1.1],["51",7.95,0.0,5.9],["52",7.95,0.0,1.1],["53",7.95,0.0,4.9],["54",7.95,14.0,4.9],["57",3.85,0.0,4.9],["58",3.85,14.0,4.9]],"frames":[[1,48,2,6,"SHS100X100X8","SHS40X40X5"],[2,2,0,6,"SHS100X100X8","SHS40X40X5"],[3,0,6,6,"SHS100X100X8","SHS40X40X5"],[4,6,4,6,"SHS100X100X8","SHS40X40X5"],[5,4,10,6,"SHS100X100X8","SHS40X40X5"],[6,10,8,6,"SHS100X100X8","SHS40X40X5"],[7,8,14,6,"SHS100X100X8","SHS40X40X5"],[8,14,12,6,"SHS100X100X8","SHS40X40X5"],[9,48,5,8,"L70X7","L65X6"],[10,4,13,8,"L70X7","L65X6"],[11,12,21,8,"L70X7","L65X6"],[12,20,46,8,"L70X7","L65X6"],[13,49,48,1,"SHS300X300X16","SHS140X140X5"],[14,51,50,1,"SHS300X300X16","SHS140X140X5"],[15,44,26,6,"SHS100X100X8","SHS40X40X5"],[16,26,24,6,"SHS100X100X8","SHS40X40X5"],[17,24,22,6,"SHS100X100X8","SHS40X40X5"],[18,22,20,6,"SHS100X100X8","SHS40X40X5"],[19,20,18,6,"SHS100X100X8","SHS40X40X5"],[20,18,16,6,"SHS100X100X8","SHS40X40X5"],[21,16,14,6,"SHS100X100X8","SHS40X40X5"],[22,46,27,6,"SHS100X100X8","SHS40X40X5"],[23,28,29,1,"SHS300X300X16","SHS140X140X5"],[24,30,31,2,"SHS300X300X16","SHS100X100X6"],[25,32,33,2,"SHS300X300X16","SHS100X100X6"],[26,34,35,1,"SHS300X300X16","SHS140X140X5"],[27,36,37,1,"SHS300X300X16","SHS140X140X5"],[28,38,39,1,"SHS300X300X16","SHS140X140X5"],[29,40,41,2,"SHS300X300X16","SHS100X100X6"],[30,42,43,2,"SHS300X300X16","SHS100X100X6"],[32,39,37,3,"SHS300X300X16","SHS150X150X5"],[33,47,46,1,"SHS300X300X16","SHS140X140X5"],[34,45,44,1,"SHS300X300X16","SHS140X140X5"],[35,29,35,3,"SHS300X300X16","SHS150X150X5"],[36,48,44,3,"SHS300X300X16","SHS150X150X5"],[37,50,46,3,"SHS300X300X16","SHS150X150X5"],[38,52,53,3,"SHS300X300X16","SHS150X150X5"],[39,29,48,5,"SHS200X200X12","SHS40X40X5"],[40,48,50,5,"SHS200X200X12","SHS40X40X5"],[41,54,55,3,"SHS300X300X16","SHS150X150X5"],[42,50,39,5,"SHS200X200X12","SHS40X40X5"],[43,27,25,6,"SHS100X100X8","SHS40X40X5"],[44,25,23,6,"SHS100X100X8","SHS40X40X5"],[45,23,21,6,"SHS100X100X8","SHS40X40X5"],[46,21,19,6,"SHS100X100X8","SHS40X40X5"],[47,19,17,6,"SHS100X100X8","SHS40X40X5"],[48,17,15,6,"SHS100X100X8","SHS40X40X5"],[49,15,13,6,"SHS100X100X8","SHS40X40X5"],[50,50,3,6,"SHS100X100X8","SHS40X40X5"],[51,3,1,6,"SHS100X100X8","SHS40X40X5"],[52,1,7,6,"SHS100X100X8","SHS40X40X5"],[53,7,5,6,"SHS100X100X8","SHS40X40X5"],[54,5,11,6,"SHS100X100X8","SHS40X40X5"],[55,11,9,6,"SHS100X100X8","SHS40X40X5"],[56,9,15,6,"SHS100X100X8","SHS40X40X5"],[57,4,5,4,"HEB200","HEA140"],[58,12,13,4,"HEB200","HEA140"],[59,20,21,4,"HEB200","HEA140"],[60,49,50,7,"L70X7","L25X5"],[61,51,48,7,"L70X7","L25X5"],[62,47,44,7,"L70X7","L25X5"],[63,35,44,5,"SHS200X200X12","SHS40X40X5"],[64,44,46,5,"SHS200X200X12","SHS40X40X5"],[65,46,37,5,"SHS200X200X12","SHS40X40X5"],[66,45,46,7,"L70X7","L25X5"]]}</script>
+<script>
+(function () {
+  const M = JSON.parse(document.getElementById('model').textContent);
+  const GROUPS = {
+    1: 'Pilares pertenecientes al pórtico principal',
+    2: 'Pilares secundarios',
+    3: 'Vigas pórtico principal e inferiores a la celosía',
+    4: 'Vigas de soporte polipasto',
+    5: 'Vigas de atado',
+    6: 'Montantes y diagonales (celosía)',
+    7: 'Arriostramientos de fachada',
+    8: 'Arriostramientos de cubierta'
+  };
+  const COLOR_NAMES = { 1: 'Azul oscuro', 2: 'Morado', 3: 'Azul claro', 4: 'Verde', 5: 'Rosa', 6: 'Naranja', 7: 'Marrón', 8: 'Rojo' };
+
+  // ---------- small vector helpers (Z is up, units in metres) ----------
+  const V = (x, y, z) => ({ x, y, z });
+  const sub = (a, b) => V(a.x - b.x, a.y - b.y, a.z - b.z);
+  const addS = (a, b, s) => V(a.x + b.x * s, a.y + b.y * s, a.z + b.z * s);
+  const dot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
+  const cross = (a, b) => V(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
+  const norm = (a) => { const l = Math.hypot(a.x, a.y, a.z) || 1; return V(a.x / l, a.y / l, a.z / l); };
+  const rad = (d) => d * Math.PI / 180;
+
+  function secName(s) {
+    let m = s.match(/^(SHS|RHS)(\d+)X(\d+)X(\d+)$/);
+    if (m) return `${m[1]} ${m[2]}×${m[3]}×${m[4]}`;
+    m = s.match(/^L(\d+)X(\d+)$/);
+    if (m) return `L ${m[1]}×${m[1]}×${m[2]}`;
+    m = s.match(/^(HE[ABM]|IPE)(\d+)$/);
+    if (m) return `${m[1]} ${m[2]}`;
+    return s;
+  }
+  function barList(nums) {
+    nums = nums.slice().sort((a, b) => a - b);
+    const parts = []; let i = 0;
+    while (i < nums.length) {
+      let j = i;
+      while (j + 1 < nums.length && nums[j + 1] === nums[j] + 1) j++;
+      if (j - i >= 4) parts.push(`${nums[i]}–${nums[j]}`); else for (let k = i; k <= j; k++) parts.push(String(nums[k]));
+      i = j + 1;
+    }
+    return parts.length > 1 ? parts.slice(0, -1).join(', ') + ' y ' + parts[parts.length - 1] : parts[0];
+  }
+  const tok = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+  // ---------- data ----------
+  const joints = M.joints.map(j => V(j[1], j[2], j[3]));
+  const frames = M.frames.map(f => ({ id: f[0], i: f[1], j: f[2], g: f[3], ini: f[4], fin: f[5] }));
+  frames.forEach(f => { const a = joints[f.i], b = joints[f.j]; f.mid = V((a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2); });
+  const byGroup = {};
+  frames.forEach(f => { (byGroup[f.g] = byGroup[f.g] || []).push(f); });
+  const usedJ = [...new Set(frames.flatMap(f => [f.i, f.j]))];
+  document.getElementById('meta').textContent = `${usedJ.length} nudos · ${frames.length} barras · 8 grupos`;
+
+  const lo = V(Infinity, Infinity, Infinity), hi = V(-Infinity, -Infinity, -Infinity);
+  joints.forEach(p => { ['x', 'y', 'z'].forEach(k => { lo[k] = Math.min(lo[k], p[k]); hi[k] = Math.max(hi[k], p[k]); }); });
+  const center = V((lo.x + hi.x) / 2, (lo.y + hi.y) / 2, (lo.z + hi.z) / 2);
+  const size = Math.hypot(hi.x - lo.x, hi.y - lo.y, hi.z - lo.z);
+  const O = V(0, 0, lo.z), AX = 1.6;
+  const axes = [['X', V(AX, 0, 0)], ['Y', V(0, AX, 0)], ['Z', V(0, 0, AX)]];
+
+  // ---------- camera: orbit around a target ----------
+  const FOV = 40, NEAR = 0.1;
+  const view = { target: V(0, 0, 0), az: 0, el: 0, dist: 1 };
+  let cam = null;
+  function resetView() {
+    view.target = V(center.x, center.y, center.z); view.az = rad(-58); view.el = rad(24); view.dist = size * 1.35;
+    requestRender();
+  }
+  function buildCam(w, h) {
+    const ce = Math.cos(view.el);
+    const pos = V(view.target.x + view.dist * ce * Math.cos(view.az),
+                  view.target.y + view.dist * ce * Math.sin(view.az),
+                  view.target.z + view.dist * Math.sin(view.el));
+    const f = norm(sub(view.target, pos));
+    const r = norm(cross(f, V(0, 0, 1)));
+    const u = cross(r, f);
+    const F = (h / 2) / Math.tan(rad(FOV / 2));
+    return { pos, f, r, u, F, w, h };
+  }
+  function toCam(p) { const v = sub(p, cam.pos); return V(dot(v, cam.r), dot(v, cam.u), dot(v, cam.f)); }
+  function toScreen(c) { return { x: cam.w / 2 + c.x / c.z * cam.F, y: cam.h / 2 - c.y / c.z * cam.F, z: c.z }; }
+  function rotate(dx, dy) { view.az -= dx * 0.008; view.el = Math.max(-1.5, Math.min(1.5, view.el + dy * 0.008)); }
+  function pan(dx, dy) {
+    if (!cam) return;
+    const k = view.dist / cam.F;
+    view.target = addS(addS(view.target, cam.r, -dx * k), cam.u, dy * k);
+  }
+  function zoom(fct) { view.dist = Math.max(size * 0.12, Math.min(size * 6, view.dist * fct)); }
+
+  // ---------- canvas ----------
+  const canvas = document.getElementById('gl');
+  const ctx = canvas.getContext('2d');
+  let colors = {};
+  const BAR = 0.11, NODE = 0.16; // drawn thickness in metres
+
+  // ---------- labels (HTML overlay) ----------
+  const labelBox = document.getElementById('labels');
+  const barLabels = frames.map(f => {
+    const el = document.createElement('div'); el.className = 'lbl';
+    el.innerHTML = `<span>${f.id}</span>`; el.style.display = 'none'; labelBox.appendChild(el); return el;
+  });
+  const axLabels = axes.map(([k]) => {
+    const el = document.createElement('div'); el.className = 'axlbl'; el.textContent = k; labelBox.appendChild(el); return el;
+  });
+  let showNums = false;
+  function place(p, el) {
+    const c = toCam(p);
+    if (c.z < NEAR) { el.style.display = 'none'; return; }
+    const s = toScreen(c);
+    if (s.x < -40 || s.y < -40 || s.x > cam.w + 40 || s.y > cam.h + 40) { el.style.display = 'none'; return; }
+    el.style.display = ''; el.style.left = s.x + 'px'; el.style.top = s.y + 'px';
+  }
+
+  function applyTheme() {
+    colors = { canvas: tok('--canvas'), joint: tok('--joint'), axis: tok('--axis'), edge: tok('--edge') };
+    for (let g = 1; g <= 8; g++) colors[g] = tok('--g' + g);
+    barLabels.forEach((el, k) => { el.style.color = colors[frames[k].g]; });
+    renderLegend();
+    requestRender();
+  }
+
+  // clip a segment against the near plane (camera space)
+  function clip(a, b) {
+    if (a.z < NEAR && b.z < NEAR) return null;
+    if (a.z < NEAR) { const t = (NEAR - a.z) / (b.z - a.z); a = V(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, NEAR); }
+    if (b.z < NEAR) { const t = (NEAR - b.z) / (a.z - b.z); b = V(b.x + (a.x - b.x) * t, b.y + (a.y - b.y) * t, NEAR); }
+    return [a, b];
+  }
+
+  let pending = false;
+  function requestRender() { if (!pending) { pending = true; requestAnimationFrame(draw); } }
+  function draw() {
+    pending = false;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (!w || !h) return;
+    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+      canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = colors.canvas; ctx.fillRect(0, 0, w, h);
+    cam = buildCam(w, h);
+
+    // axes (thin, drawn first)
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = colors.axis; ctx.lineWidth = 1.5;
+    axes.forEach(([, v]) => {
+      const s = clip(toCam(O), toCam(addS(O, v, 1))); if (!s) return;
+      const a = toScreen(s[0]), b = toScreen(s[1]);
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    });
+
+    // bars and joints, far to near (painter's algorithm)
+    const items = [];
+    frames.forEach(f => {
+      const s = clip(toCam(joints[f.i]), toCam(joints[f.j])); if (!s) return;
+      items.push({ t: 'b', g: f.g, a: s[0], b: s[1], z: (s[0].z + s[1].z) / 2 });
+    });
+    usedJ.forEach(k => { const c = toCam(joints[k]); if (c.z >= NEAR) items.push({ t: 'j', c, z: c.z - 0.05 }); });
+    items.sort((p, q) => q.z - p.z);
+    for (const it of items) {
+      if (it.t === 'b') {
+        const a = toScreen(it.a), b = toScreen(it.b);
+        const wa = Math.max(1.6, BAR * cam.F / it.a.z), wb = Math.max(1.6, BAR * cam.F / it.b.z);
+        const wd = (wa + wb) / 2;
+        ctx.strokeStyle = colors.edge; ctx.lineWidth = wd + 1.4;
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+        ctx.strokeStyle = colors[it.g]; ctx.lineWidth = wd;
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      } else {
+        const s = toScreen(it.c), r = Math.max(1.8, NODE * cam.F / it.c.z) / 2;
+        ctx.fillStyle = colors.joint;
+        ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+
+    frames.forEach((f, k) => { if (showNums) place(f.mid, barLabels[k]); else barLabels[k].style.display = 'none'; });
+    axes.forEach(([, v], k) => place(addS(O, v, 1.2), axLabels[k]));
+  }
+  new ResizeObserver(requestRender).observe(canvas);
+
+  // ---------- input ----------
+  const pts = new Map(); let mode = null, last = null, pinch = null;
+  function pinchState() {
+    const [a, b] = [...pts.values()];
+    return { d: Math.hypot(a.x - b.x, a.y - b.y), mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
+  }
+  canvas.addEventListener('pointerdown', e => {
+    canvas.focus({ preventScroll: true });
+    if (e.pointerType === 'touch') {
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      canvas.setPointerCapture(e.pointerId);
+      if (pts.size === 2) { pinch = pinchState(); mode = 'pinch'; } else if (pts.size === 1) { mode = 'rotate'; last = { x: e.clientX, y: e.clientY }; }
+      return;
+    }
+    if (e.button === 1) { e.preventDefault(); mode = (e.ctrlKey || e.metaKey) ? 'rotate' : 'pan'; }
+    else if (e.button === 0) { mode = e.shiftKey ? 'pan' : 'rotate'; }
+    else return;
+    last = { x: e.clientX, y: e.clientY };
+    canvas.setPointerCapture(e.pointerId);
+    canvas.classList.add('dragging');
+  });
+  canvas.addEventListener('mousedown', e => { if (e.button === 1) e.preventDefault(); });
+  canvas.addEventListener('auxclick', e => { if (e.button === 1) e.preventDefault(); });
+  canvas.addEventListener('pointermove', e => {
+    if (e.pointerType === 'touch') {
+      if (!pts.has(e.pointerId)) return;
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (mode === 'pinch' && pts.size === 2) {
+        const p = pinchState();
+        if (p.d > 0 && pinch.d > 0) zoom(pinch.d / p.d);
+        pan(p.mx - pinch.mx, p.my - pinch.my);
+        pinch = p; requestRender();
+      } else if (mode === 'rotate' && last) {
+        rotate(e.clientX - last.x, e.clientY - last.y); last = { x: e.clientX, y: e.clientY }; requestRender();
+      }
+      return;
+    }
+    if (!mode || !last) return;
+    const dx = e.clientX - last.x, dy = e.clientY - last.y; last = { x: e.clientX, y: e.clientY };
+    if (mode === 'rotate') rotate(dx, dy); else pan(dx, dy);
+    requestRender();
+  });
+  function endPointer(e) {
+    if (e.pointerType === 'touch') {
+      pts.delete(e.pointerId);
+      if (pts.size === 1) { mode = 'rotate'; const p = [...pts.values()][0]; last = { x: p.x, y: p.y }; }
+      else if (pts.size === 0) { mode = null; last = null; }
+      return;
+    }
+    mode = null; last = null; canvas.classList.remove('dragging');
+  }
+  canvas.addEventListener('pointerup', endPointer);
+  canvas.addEventListener('pointercancel', endPointer);
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+    zoom(Math.exp(dy * 0.0012)); requestRender();
+  }, { passive: false });
+  canvas.addEventListener('keydown', e => {
+    const step = 12; let hit = true;
+    if (e.key === 'ArrowLeft') rotate(-step, 0); else if (e.key === 'ArrowRight') rotate(step, 0);
+    else if (e.key === 'ArrowUp') rotate(0, -step); else if (e.key === 'ArrowDown') rotate(0, step);
+    else if (e.key === '+' || e.key === '=') zoom(0.9); else if (e.key === '-') zoom(1.1);
+    else hit = false;
+    if (hit) { e.preventDefault(); requestRender(); }
+  });
+
+  // ---------- legend ----------
+  let legendMode = 'grupos';
+  const NOTES = {
+    grupos: 'Cada barra está coloreada según su grupo.',
+    ini: 'Secciones del modelo inicial del cliente (los colores siguen siendo los del grupo).',
+    fin: 'Secciones del modelo final optimizado (los colores siguen siendo los del grupo).'
+  };
+  function renderLegend() {
+    const ul = document.getElementById('legend'); ul.innerHTML = '';
+    document.getElementById('legend-note').textContent = NOTES[legendMode];
+    for (let g = 1; g <= 8; g++) {
+      const fs = byGroup[g] || [];
+      const li = document.createElement('li');
+      let sub2;
+      if (legendMode === 'grupos') {
+        sub2 = `<div class="gsub">Barras ${barList(fs.map(f => f.id))}</div>`;
+      } else {
+        const counts = {};
+        fs.forEach(f => { const s = legendMode === 'ini' ? f.ini : f.fin; counts[s] = (counts[s] || 0) + 1; });
+        sub2 = Object.entries(counts).map(([s, n]) => `<div class="gsec">${secName(s)} <span class="n">· ${n} barra${n > 1 ? 's' : ''}</span></div>`).join('');
+      }
+      li.innerHTML = `<span class="chip" style="background:${colors[g]}" title="${COLOR_NAMES[g]}"></span>` +
+        `<span class="gnum">${g}</span><div class="gname">${GROUPS[g]}</div>${sub2}`;
+      ul.appendChild(li);
+    }
+  }
+  document.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => {
+    legendMode = b.dataset.mode;
+    document.querySelectorAll('.seg button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    renderLegend();
+  }));
+  document.getElementById('show-num').addEventListener('change', e => { showNums = e.target.checked; requestRender(); });
+  document.getElementById('reset').addEventListener('click', resetView);
+
+  try { window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme); } catch (err) {}
+  new MutationObserver(applyTheme).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+  resetView();
+  applyTheme();
+})();
+</script>
+</body>
+</html>
